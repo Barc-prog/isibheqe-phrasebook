@@ -382,6 +382,21 @@ html,body{height:100vh;height:100dvh}
   #toolbar{flex-wrap:nowrap;padding:5px 10px;overflow:hidden;min-width:0}
   #status{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;text-align:right}
 }
+
+/* ---- 12 Nov: readability (D16) ---- */
+/* Field labels big enough to read. */
+.fld label, .ph-lbl{font-size:12px;letter-spacing:.08em;color:#b7b1cc}
+.meta input, .meta textarea, #ph-note{font-size:14px}
+/* Theme is the context for everything you save, so it stands out in amber. */
+#ph-work .ph-lbl.theme{color:var(--acc)}
+#ph-theme{border:1.5px solid var(--acc) !important;color:var(--acc) !important;font-size:15px !important;font-weight:700 !important}
+#ph-lang{font-size:15px !important}
+/* Build / Sets: a clear two-way switch, not quiet tabs. */
+#ph-tabs{gap:8px;padding:8px 10px;align-items:center}
+.ph-tab{border:1.5px solid var(--dimmer);border-radius:10px;padding:10px 0;font-size:14px;letter-spacing:.1em;color:var(--txt);background:var(--sur2)}
+.ph-tab.on{background:var(--acc);border-color:var(--acc);color:var(--bg)}
+.ph-tab.on .ph-n{background:var(--bg);color:var(--acc)}
+#ph-me{margin:0 0 0 2px}
 </style>
 </head>
 <body>
@@ -405,14 +420,14 @@ html,body{height:100vh;height:100dvh}
   <div id="ph-bar">
     <div id="ph-demo-banner"></div>
     <div id="ph-tabs">
-      <button class="ph-tab on" data-ph-tab="build">Build</button>
-      <button class="ph-tab" data-ph-tab="sets">Sets<span class="ph-n" id="ph-tab-n" hidden></span></button>
+      <button class="ph-tab on" data-ph-tab="build">✎ Build</button>
+      <button class="ph-tab" data-ph-tab="sets">▦ Sets<span class="ph-n" id="ph-tab-n" hidden></span></button>
       <button id="ph-me" data-ph-act="me" aria-label="Your account, team list and export">…</button>
     </div>
     <div id="ph-work">
       <div class="ph-row">
         <div class="ph-col" style="flex:1.4">
-          <span class="ph-lbl">Theme</span>
+          <span class="ph-lbl theme">Theme</span>
           <select id="ph-theme" aria-label="Theme"></select>
         </div>
         <div class="ph-col" style="flex:1">
@@ -3009,6 +3024,8 @@ function ago(t){
   if (s < 60) return "just now"; if (s < 3600) return Math.floor(s/60) + "m ago";
   if (s < 86400) return Math.floor(s/3600) + "h ago"; return Math.floor(s/86400) + "d ago";
 }
+// Firestore refuses fields set to undefined; a JSON round trip drops them.
+const clean = (o) => JSON.parse(JSON.stringify(o));
 const today = () => new Date().toISOString().slice(0, 10);
 const store = {
   get(k){ try { return localStorage.getItem(k); } catch(e){ return null; } },
@@ -3221,17 +3238,20 @@ async function saveEntry(){
   if (!glyphsTyped()){ setStatus("build the glyphs first", "err"); return; }
   const missing = state.tokens.filter((tk, i) => tk !== " " && tk !== "\n" && !(state.latin[i] || "").trim()).length;
   const r = buildRecord();
-  const data = { themeId: t.id, language: lang, latin: r.latin || "", gloss: r.gloss || "", code: r.code, syllables: r.syllables,
+  // Firestore can't store a list inside a list, and each syllable's code is one (["a",["°"]]).
+  // So each syllable's code is saved as text. Loading only needs the Latin; the phrase code is text already.
+  const syllables = r.syllables.map(s => s.break ? { break: s.break } : { code: JSON.stringify(s.code), latin: s.latin || "" });
+  const data = { themeId: t.id, language: lang, latin: r.latin || "", gloss: r.gloss || "", code: r.code, syllables,
     tags: S.pickedTags.slice(), note: el("ph-note").value.trim(), updatedBy: myEmail(), updatedByName: myName() };
   const btn = el("ph-save"); btn.disabled = true;
   try {
     if (S.editingId){
       const old = S.entries.find(x => x.id === S.editingId);
       if (old && old.checkedBy) Object.assign(data, { checkedBy: null, checkedByName: null, checkedAt: null });   // D3
-      await db.update("entries", S.editingId, data);
+      await db.update("entries", S.editingId, clean(data));
       log(`edited ${data.latin || "an entry"} in ${t.name}`);
     } else {
-      await db.add("entries", { ...data, createdBy: myEmail(), createdByName: myName(), checkedBy: null });
+      await db.add("entries", clean({ ...data, createdBy: myEmail(), createdByName: myName(), checkedBy: null }));
       log(`added ${data.latin || "an entry"} to ${t.name}`);
     }
     const count = entriesOf(t.id, lang).length;
@@ -3493,7 +3513,10 @@ function meSheet(){
 }
 
 function exportAll(){
-  const out = { exported: new Date().toISOString(), themes: S.themes, entries: S.entries, tags: S.tags };
+  // Entries go out in the Card Builder's own record shape, so any of them opens there too.
+  const asRecord = (e) => ({ ...e, round: themeById(e.themeId)?.name || null, scribe: e.createdByName || null,
+    syllables: (e.syllables || []).map(s => s.break ? s : { latin: s.latin, code: typeof s.code === "string" ? JSON.parse(s.code) : s.code }) });
+  const out = { exported: new Date().toISOString(), themes: S.themes, entries: S.entries.map(asRecord), tags: S.tags };
   download(new Blob([JSON.stringify(out, null, 2)], { type: "application/json" }), `phrasebook-export_${today()}.json`);
   phToast("Export downloaded");
 }
@@ -3580,6 +3603,22 @@ function wireBuild(){
 (() => {
   const more = el("more-export"); if (!more) return;
   ["open-exp","open-file","load-code","dl-card","copy-card","share-card","dl-json","copy-record"].forEach(id => { const b = el(id); if (b){ b.classList.remove("btn-acc"); more.prepend(b); } });
+})();
+
+/* Card types for the phrasebook (D15). Preview only: nothing about it is saved.
+   6 = phrasebook card: amaBheqe + Latin syllables + gloss, no full-Latin line, no footer. */
+(() => {
+  const sel = el("card-mode"); if (!sel) return;
+  sel.innerHTML = `<option value="6">Phrasebook card · syllables + gloss</option>
+    <option value="5">Full card · everything</option>
+    <option value="1">Glyphs only</option>`;
+  sel.value = "6";
+  window.cardMode = function(){ const m = parseInt(sel.value, 10); return [1,2,3,4,5,6].includes(m) ? m : 6; };
+  const cbLayers = window.layers;
+  window.layers = function(m){ return m === 6 ? { sylLatin: true, fullLatin: false, gloss: true, footer: false } : cbLayers(m); };
+  const lbl = sel.parentElement.querySelector(".tlbl"); if (lbl) lbl.textContent = "preview as";
+  document.querySelectorAll("#footer .tlbl").forEach(x => { if (x.textContent.trim() === "show") x.textContent = "preview as"; });
+  if (typeof drawCard === "function") drawCard();
 })();
 
 </script>
