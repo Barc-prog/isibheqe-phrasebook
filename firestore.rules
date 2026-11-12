@@ -1,0 +1,33 @@
+rules_version = '2';
+// isiBheqe Phrasebook: Firestore security rules.
+// Paste the whole file into Firebase console → Firestore Database → Rules → Publish.
+// One idea only: people on the team list can do everything; nobody else can read or write.
+// (The public read-only link comes later and will open checked entries on purpose.)
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null && request.auth.token.email_verified == true; }
+    function me()       { return request.auth.token.email.lower(); }
+    // The first person on the team list. Must match BOOTSTRAP_EMAIL in index.html.
+    function isFirst()  { return signedIn() && me() == 'bandingidi@gmail.com'; }
+    function onTeam()   { return isFirst() || (signedIn() && exists(/databases/$(database)/documents/members/$(me()))); }
+
+    // The team list: anyone on it can add people; you can't remove yourself.
+    match /members/{email} {
+      allow read: if onTeam() || (signedIn() && email == me());
+      allow create, update: if onTeam();
+      allow delete: if onTeam() && email != me();
+    }
+
+    match /themes/{id}  { allow read, create, update: if onTeam(); allow delete: if false; }
+    match /entries/{id} { allow read, create, update: if onTeam(); allow delete: if false; }
+    match /tags/{id}    { allow read, create: if onTeam(); allow update, delete: if false; }
+
+    // The activity feed: add-only, and nobody can post as someone else.
+    match /activity/{id} {
+      allow read: if onTeam();
+      allow create: if onTeam() && request.resource.data.actor == me();
+      allow update, delete: if false;
+    }
+  }
+}
